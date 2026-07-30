@@ -570,7 +570,7 @@ func TestServerMetricHandler(t *testing.T) {
 		w = httptest.NewRecorder()
 		server.workloadMetricHandler(w, req)
 
-		assert.Equal(t, false, server.xdsClient.WorkloadController.GetWorklaodMetricTrigger())
+		assert.Equal(t, false, server.xdsClient.WorkloadController.GetWorkloadMetricTrigger())
 
 		url = fmt.Sprintf("%s?enable=%s", patternConnectionMetrics, "false")
 		req = httptest.NewRequest(http.MethodPost, url, nil)
@@ -619,7 +619,7 @@ func TestServerMetricHandler(t *testing.T) {
 		w = httptest.NewRecorder()
 		server.workloadMetricHandler(w, req)
 
-		assert.Equal(t, false, server.xdsClient.WorkloadController.GetWorklaodMetricTrigger())
+		assert.Equal(t, false, server.xdsClient.WorkloadController.GetWorkloadMetricTrigger())
 
 		url = fmt.Sprintf("%s?enable=%s", patternConnectionMetrics, "true")
 		req = httptest.NewRequest(http.MethodPost, url, nil)
@@ -660,5 +660,89 @@ func TestServerMonitoringHandler(t *testing.T) {
 		assert.Equal(t, true, server.xdsClient.WorkloadController.GetAccesslogTrigger())
 		enableMonitoring := l.GetEnableMonitoring()
 		assert.Equal(t, constants.ENABLED, enableMonitoring)
+	})
+}
+
+func TestServerAuthzHandler(t *testing.T) {
+	t.Run("disable and check authz offload", func(t *testing.T) {
+		config := options.BpfConfig{
+			Mode:        constants.DualEngineMode,
+			BpfFsPath:   "/sys/fs/bpf",
+			Cgroup2Path: "/mnt/kmesh_cgroup2",
+		}
+		cleanup, l := test.InitBpfMap(t, config)
+		defer cleanup()
+
+		server := &Server{
+			xdsClient: &controller.XdsClient{
+				WorkloadController: &workload.Controller{
+					MetricController: &telemetry.MetricController{},
+				},
+			},
+			loader: l,
+		}
+
+		// disable authz
+		url := fmt.Sprintf("%s?enable=%s", patternAuthz, "false")
+		req := httptest.NewRequest(http.MethodPost, url, nil)
+		w := httptest.NewRecorder()
+		server.authzHandler(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		// verify it shows as disabled
+		req = httptest.NewRequest(http.MethodGet, patternAuthz, nil)
+		w = httptest.NewRecorder()
+		server.authzHandler(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp struct {
+			Enabled bool `json:"enabled"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, err)
+		assert.False(t, resp.Enabled)
+	})
+
+	t.Run("enable and check authz offload", func(t *testing.T) {
+		config := options.BpfConfig{
+			Mode:        constants.DualEngineMode,
+			BpfFsPath:   "/sys/fs/bpf",
+			Cgroup2Path: "/mnt/kmesh_cgroup2",
+		}
+		cleanup, l := test.InitBpfMap(t, config)
+		defer cleanup()
+
+		server := &Server{
+			xdsClient: &controller.XdsClient{
+				WorkloadController: &workload.Controller{
+					MetricController: &telemetry.MetricController{},
+				},
+			},
+			loader: l,
+		}
+
+		// enable authz
+		url := fmt.Sprintf("%s?enable=%s", patternAuthz, "true")
+		req := httptest.NewRequest(http.MethodPost, url, nil)
+		w := httptest.NewRecorder()
+		server.authzHandler(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		// verify it shows as enabled
+		req = httptest.NewRequest(http.MethodGet, patternAuthz, nil)
+		w = httptest.NewRecorder()
+		server.authzHandler(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp struct {
+			Enabled bool `json:"enabled"`
+		}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.NoError(t, err)
+		assert.True(t, resp.Enabled)
+
+		authzOffload, err := l.GetAuthzOffload()
+		assert.NoError(t, err)
+		assert.Equal(t, constants.ENABLED, authzOffload)
 	})
 }

@@ -56,6 +56,10 @@ func ShouldEnroll(pod *corev1.Pod, ns *corev1.Namespace) bool {
 			}
 		}
 
+		if _, ok := pod.Labels["gateway.networking.k8s.io/gateway-name"]; ok {
+			return false
+		}
+
 		podMode := pod.Labels[constants.DataPlaneModeLabel]
 		// Check if pod label contains istio.io/dataplane-mode: kmesh
 		if strings.EqualFold(podMode, constants.DataPlaneModeKmesh) {

@@ -101,6 +101,7 @@ func NewServer(c *controller.XdsClient, configs *options.BootstrapConfigs, loade
 	s.mux.HandleFunc(patternWorkloadMetrics, s.workloadMetricHandler)
 	s.mux.HandleFunc(patternConnectionMetrics, s.connectionMetricHandler)
 	s.mux.HandleFunc(patternAuthz, s.authzHandler)
+	s.mux.HandleFunc("/debug/features", s.featuresHandler)
 
 	// TODO: add dump certificate, authorizationPolicies and services
 	s.mux.HandleFunc(patternReadyProbe, s.readyProbe)
@@ -218,7 +219,24 @@ func (s *Server) loggersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func writeFeatureStatus(w http.ResponseWriter, enabled bool) {
+	data, err := json.MarshalIndent(&struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: enabled}, "", "    ")
+	if err != nil {
+		log.Errorf("Failed to marshal feature status: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 func (s *Server) accesslogHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeFeatureStatus(w, s.xdsClient.WorkloadController.GetAccesslogTrigger())
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -242,6 +260,10 @@ func (s *Server) accesslogHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) monitoringHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeFeatureStatus(w, s.xdsClient.WorkloadController.GetMonitoringTrigger())
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -275,6 +297,10 @@ func (s *Server) monitoringHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workloadMetricHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeFeatureStatus(w, s.xdsClient.WorkloadController.GetWorkloadMetricTrigger())
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -298,6 +324,10 @@ func (s *Server) workloadMetricHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) connectionMetricHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeFeatureStatus(w, s.xdsClient.WorkloadController.GetConnectionMetricTrigger())
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
@@ -330,11 +360,56 @@ func (s *Server) connectionMetricHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) authzHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method == http.MethodGet {
+		s.getAuthzStatus(w)
+	} else if r.Method == http.MethodPost {
+		s.setAuthzStatus(w, r)
+	} else {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) getAuthzStatus(w http.ResponseWriter) {
+	authzOffload, err := s.loader.GetAuthzOffload()
+	if err != nil {
+		http.Error(w, "Failed to read authz offload status", http.StatusInternalServerError)
+		return
+	}
+	enabled := authzOffload == constants.ENABLED
+	writeFeatureStatus(w, enabled)
+}
+
+func (s *Server) featuresHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	authzOffload, _ := s.loader.GetAuthzOffload()
+
+	data, err := json.MarshalIndent(&struct {
+		Monitoring        bool `json:"monitoring"`
+		Accesslog         bool `json:"accesslog"`
+		WorkloadMetrics   bool `json:"workload_metrics"`
+		ConnectionMetrics bool `json:"connection_metrics"`
+		AuthzOffload      bool `json:"authz_offload"`
+	}{
+		Monitoring:        s.xdsClient.WorkloadController.GetMonitoringTrigger(),
+		Accesslog:         s.xdsClient.WorkloadController.GetAccesslogTrigger(),
+		WorkloadMetrics:   s.xdsClient.WorkloadController.GetWorkloadMetricTrigger(),
+		ConnectionMetrics: s.xdsClient.WorkloadController.GetConnectionMetricTrigger(),
+		AuthzOffload:      authzOffload == constants.ENABLED,
+	}, "", "    ")
+	if err != nil {
+		log.Errorf("Failed to marshal features status: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (s *Server) setAuthzStatus(w http.ResponseWriter, r *http.Request) {
 	authzInfo := r.URL.Query().Get("enable")
 	enabled, err := strconv.ParseBool(authzInfo)
 	if err != nil {

@@ -377,11 +377,12 @@ func (l *BpfLoader) UpdateKmeshConfigMap(config factory.GlobalBpfConfig) error {
 }
 
 func (l *BpfLoader) GetKmeshConfigMap() factory.GlobalBpfConfig {
+	authzOffload, _ := l.GetAuthzOffload()
 	return factory.GlobalBpfConfig{
 		BpfLogLevel:      l.GetBpfLogLevel(),
 		NodeIP:           l.GetNodeIP(),
 		PodGateway:       l.GetPodGateway(),
-		AuthzOffload:     l.GetAuthzOffload(),
+		AuthzOffload:     authzOffload,
 		EnableMonitoring: l.GetEnableMonitoring(),
 	}
 }
@@ -484,14 +485,15 @@ func (l *BpfLoader) UpdateAuthzOffload(authzOffload uint32) error {
 	return nil
 }
 
-func (l *BpfLoader) GetAuthzOffload() uint32 {
+func (l *BpfLoader) GetAuthzOffload() (uint32, error) {
 	var authzOffload uint32
 	if l.workloadObj != nil {
 		if err := l.workloadObj.XdpAuth.AuthzOffload.Get(&authzOffload); err != nil {
 			log.Errorf("get AuthzOffload failed %v", err)
+			return 0, err
 		}
 	}
-	return authzOffload
+	return authzOffload, nil
 }
 
 func (l *BpfLoader) UpdateEnableMonitoring(enableMonitoring uint32) error {
