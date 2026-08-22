@@ -19,6 +19,7 @@ package workload
 import (
 	"net/netip"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -338,4 +339,85 @@ func TestCloneWorkload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolvedDomainChanMapConcurrentAccess(t *testing.T) {
+	workloadMap := bpfcache.NewFakeWorkloadMap(t)
+	defer bpfcache.CleanupFakeWorkloadMap(workloadMap)
+
+	p := NewProcessor(workloadMap)
+	dnsController, _ := NewDnsController(p.WorkloadCache)
+	p.dnsController = dnsController
+	p.DnsResolverChan = dnsController.workloadsChan
+
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	go dnsController.Run(stopCh)
+
+	const numIterations = 100
+	const uid = "test-concurrent-uid"
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Goroutine 1: simulates the workload_processor.go side creating and timing out
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numIterations; i++ {
+			p.dnsController.CreateResolveChannel(uid)
+			time.Sleep(1 * time.Millisecond)
+			p.dnsController.DeleteResolveChannel(uid)
+		}
+	}()
+
+	// Goroutine 2: simulates dns.go side calling Get and Delete
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numIterations; i++ {
+			ch := p.dnsController.GetResolveChannel(uid)
+			if ch != nil {
+				time.Sleep(1 * time.Millisecond)
+				p.dnsController.DeleteResolveChannel(uid)
+			} else {
+				time.Sleep(1 * time.Millisecond)
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestDNSResolutionTimeoutNoSendOnClosed(t *testing.T) {
+	workloadMap := bpfcache.NewFakeWorkloadMap(t)
+	defer bpfcache.CleanupFakeWorkloadMap(workloadMap)
+
+	p := NewProcessor(workloadMap)
+	dnsController, _ := NewDnsController(p.WorkloadCache)
+	p.dnsController = dnsController
+
+	uid := "test-timeout-uid"
+
+	ch := p.dnsController.CreateResolveChannel(uid)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		ch := p.dnsController.GetResolveChannel(uid)
+		assert.NotNil(t, ch)
+
+		p.dnsController.DeleteResolveChannel(uid)
+
+		select {
+		case ch <- &workloadapi.Workload{}:
+			t.Log("sent to channel")
+		case <-time.After(10 * time.Millisecond):
+			t.Log("sender timed out")
+		}
+	}()
+	
+	wg.Wait()
+	
+	assert.Nil(t, p.dnsController.GetResolveChannel(uid))
 }

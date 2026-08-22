@@ -76,8 +76,8 @@ type Processor struct {
 
 	handlers map[string][]func(resp *service_discovery_v3.DeltaDiscoveryResponse) error
 
-	DnsResolverChan       chan *workloadapi.Workload
-	ResolvedDomainChanMap map[string]chan *workloadapi.Workload
+	DnsResolverChan chan *workloadapi.Workload
+	dnsController   *dnsController
 	// Callback to remove workload from DNS cache when workload is deleted
 	onWorkloadDeleted func(workloadName string)
 }
@@ -959,19 +959,16 @@ func (p *Processor) handleServicesAndWorkloads(services []*workloadapi.Service, 
 			}
 
 			uid := workload.GetUid()
-			p.ResolvedDomainChanMap[uid] = make(chan *workloadapi.Workload)
+			p.dnsController.CreateResolveChannel(uid)
 			p.DnsResolverChan <- workload
 			log.Infof("waiting for DNS resolution: %s/%s/%s", workload.Namespace, workload.Name, uid)
 
 			select {
 			case <-time.After(dnsResolveTimeout):
 				log.Warnf("DNS resolution timeout for workload %s/%s/%s, skip handling", workload.Namespace, workload.Name, uid)
-				if ch, ok := p.ResolvedDomainChanMap[uid]; ok {
-					close(ch)
-					delete(p.ResolvedDomainChanMap, uid)
-				}
+				p.dnsController.DeleteResolveChannel(uid)
 				continue
-			case newWorkload := <-p.ResolvedDomainChanMap[uid]:
+			case newWorkload := <-p.dnsController.GetResolveChannel(uid):
 				if newWorkload == nil || newWorkload.GetAddresses() == nil {
 					log.Warnf("workload %s/%s resolved addresses is nil, skip handling", workload.Namespace, workload.Name)
 					continue

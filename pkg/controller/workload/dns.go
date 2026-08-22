@@ -174,11 +174,8 @@ func (r *dnsController) updateWorkloads(pendingDomain *pendingResolveDomain, dom
 	for _, newWorkload := range readyWorkloads {
 		uid := newWorkload.GetUid()
 
-		r.Lock()
-		ch, ok := r.ResolvedDomainChanMap[uid]
-		r.Unlock()
-
-		if ok {
+		ch := r.GetResolveChannel(uid)
+		if ch != nil {
 			r.cache.AddOrUpdateWorkload(newWorkload)
 			select {
 			case ch <- newWorkload:
@@ -186,13 +183,8 @@ func (r *dnsController) updateWorkloads(pendingDomain *pendingResolveDomain, dom
 			case <-time.After(WorkloadChannelSendTimeout):
 				log.Warnf("timeout sending resolved workload %s/%s", newWorkload.Namespace, newWorkload.Name)
 			}
-
-			r.Lock()
-			if _, stillExists := r.ResolvedDomainChanMap[uid]; stillExists {
-				close(r.ResolvedDomainChanMap[uid])
-				delete(r.ResolvedDomainChanMap, uid)
-			}
-			r.Unlock()
+			// Handoff: drop our claim so a stale refresh can't reuse the entry.
+			r.DeleteResolveChannel(uid)
 		}
 	}
 
@@ -301,4 +293,32 @@ func cloneWorkload(workload *workloadapi.Workload) *workloadapi.Workload {
 	}
 	workloadCopy := proto.Clone(workload).(*workloadapi.Workload)
 	return workloadCopy
+}
+
+// CreateResolveChannel creates the resolution channel for uid if absent and returns it.
+func (r *dnsController) CreateResolveChannel(uid string) chan *workloadapi.Workload {
+	r.Lock()
+	defer r.Unlock()
+	ch, ok := r.ResolvedDomainChanMap[uid]
+	if !ok {
+		ch = make(chan *workloadapi.Workload)
+		r.ResolvedDomainChanMap[uid] = ch
+	}
+	return ch
+}
+
+// GetResolveChannel returns the pending channel for uid, or nil.
+func (r *dnsController) GetResolveChannel(uid string) chan *workloadapi.Workload {
+	r.RLock()
+	defer r.RUnlock()
+	return r.ResolvedDomainChanMap[uid]
+}
+
+// DeleteResolveChannel removes the entry for uid if present. Channels are not
+// closed: every reader/sender has its own timeout, so close would introduce
+// send-on-closed / double-close races for zero benefit. Dropped entries are GC'd.
+func (r *dnsController) DeleteResolveChannel(uid string) {
+	r.Lock()
+	defer r.Unlock()
+	delete(r.ResolvedDomainChanMap, uid)
 }

@@ -55,7 +55,7 @@ func NewController(bpfWorkload *bpfwl.BpfWorkload, enableMonitoring, enablePerfM
 		return nil, fmt.Errorf("failed to create DNS resolver for Dual-Engine mode: %w", err)
 	}
 	processor.DnsResolverChan = dnsResolverController.workloadsChan
-	processor.ResolvedDomainChanMap = dnsResolverController.ResolvedDomainChanMap
+	processor.dnsController = dnsResolverController
 
 	// Set up callback to clean DNS cache when workload is deleted
 	processor.onWorkloadDeleted = func(workloadName string) {
