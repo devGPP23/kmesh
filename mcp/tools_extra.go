@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	ctlsecret "kmesh.net/kmesh/ctl/secret"
+	"kmesh.net/kmesh/ctl/utils"
 	"kmesh.net/kmesh/pkg/constants"
 )
 
@@ -56,7 +57,7 @@ type ipSecKeyFile struct {
 func (h *McpHandler) HandleGetIpsecStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ns := req.GetString("namespace", "")
 	if ns == "" {
-		ns = "kmesh-system"
+		ns = utils.KmeshNamespace
 	}
 	if err := validateK8sName("namespace", ns); err != nil {
 		return mcp.NewToolResultError(err.Error()), nil

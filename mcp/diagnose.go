@@ -108,8 +108,8 @@ func (h *McpHandler) diagnoseDualEngine(ctx context.Context, podName, namespace,
 	dumpCats := collectCategories(dump)
 	bpfCats := collectCategories(bpf)
 
-	src, srcKind := resolveEndpoint(dumpCats, source)
-	dst, dstKind := resolveEndpoint(dumpCats, target)
+	src, srcKind := resolveEndpoint(dumpCats, source, true)
+	dst, dstKind := resolveEndpoint(dumpCats, target, false)
 
 	out := diagnoseOutput{
 		Mode:   "dual-engine",
@@ -159,20 +159,22 @@ func (h *McpHandler) diagnoseKernelNative(ctx context.Context, podName, namespac
 	return marshalToolJSON(out)
 }
 
-// resolveEndpoint finds the named entity in the workload dump. A match on a
-// service entry wins over a workload match because targets are usually
-// services.
-func resolveEndpoint(cats map[string][]map[string]any, input string) (map[string]any, string) {
-	if items := cats["services"]; len(items) > 0 {
-		for _, it := range items {
-			if serviceMatches(it, input) {
-				return it, "service"
-			}
-		}
+// resolveEndpoint finds the named entity in the workload dump. Sources are
+// usually workloads and targets are usually services, so the preferred kind is
+// checked first and the other kind is used as a fallback.
+func resolveEndpoint(cats map[string][]map[string]any, input string, preferWorkload bool) (map[string]any, string) {
+	kinds := []string{"services", "workloads"}
+	matchFns := []func(map[string]any, string) bool{serviceMatches, workloadMatches}
+	if preferWorkload {
+		kinds = []string{"workloads", "services"}
+		matchFns = []func(map[string]any, string) bool{workloadMatches, serviceMatches}
 	}
-	if items := cats["workloads"]; len(items) > 0 {
-		for _, it := range items {
-			if workloadMatches(it, input) {
+	for i, kind := range kinds {
+		for _, it := range cats[kind] {
+			if matchFns[i](it, input) {
+				if kind == "services" {
+					return it, "service"
+				}
 				return it, "workload"
 			}
 		}
